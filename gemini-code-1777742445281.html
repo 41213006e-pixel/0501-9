@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brawl Health: 荒野衛教大對抗</title>
+    <style>
+        :root {
+            --bs-blue: #0084ff;
+            --bs-green: #44bd32;
+            --bs-red: #c23616;
+            --bs-yellow: #fbc531;
+            --bs-dark: #2f3640;
+            --bs-grass: #4cd137;
+        }
+
+        body {
+            font-family: 'Arial Black', sans-serif;
+            background-color: var(--bs-dark);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: white;
+            overflow: hidden;
+        }
+
+        /* 頂部 UI */
+        #top-bar {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 15px 15px 0 0;
+        }
+
+        #hp-container {
+            width: 200px;
+            height: 25px;
+            background: #444;
+            border: 3px solid white;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        #hp-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, #ff4d4d, #b30000);
+            transition: width 0.3s;
+        }
+
+        /* 畫布 */
+        canvas {
+            border: 8px solid #555;
+            background-color: #718093; /* 荒野地圖基色 */
+            cursor: crosshair;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+
+        /* 題目顯示 */
+        #quiz-overlay {
+            width: 800px;
+            background: linear-gradient(135deg, #1e3799, #0984e3);
+            padding: 15px;
+            text-align: center;
+            font-size: 20px;
+            border-top: 4px solid var(--bs-yellow);
+        }
+
+        .score-text { color: var(--bs-yellow); font-size: 24px; }
+    </style>
+</head>
+<body>
+
+<div id="top-bar">
+    <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:30px">😎</span>
+        <div id="hp-container"><div id="hp-fill"></div></div>
+    </div>
+    <div class="score-text" id="score-display">SCORE: 0</div>
+</div>
+
+<canvas id="brawlCanvas" width="800" height="450"></canvas>
+
+<div id="quiz-overlay">
+    <div id="question-text">準備進入荒野競技場...</div>
+</div>
+
+<script>
+    const canvas = document.getElementById('brawlCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const quizBank = [
+        { q: "成人每日建議飲水量是體重(kg)乘以多少？", options: ["10ml", "20ml", "30-35ml", "100ml"], correct: 2 },
+        { q: "正確洗手步驟「內外夾弓大立腕」，最後動作是？", options: ["指尖", "手背", "手腕", "手心"], correct: 2 },
+        { q: "下列哪種運動最能增進心肺功能？", options: ["慢跑", "看電視", "睡覺", "發呆"], correct: 0 },
+        { q: "預防近視，用眼30分鐘應休息多久？", options: ["1分鐘", "10分鐘", "30分鐘", "不必"], correct: 1 }
+    ];
+
+    let currentLevel = 0;
+    let score = 0;
+    let hp = 100;
+    let gameStarted = false;
+    let gameObjects = []; // 包含牆壁、草叢、地雷
+
+    const player = {
+        x: 400, y: 225, radius: 18, color: '#00a8ff', speed: 5,
+        vx: 0, vy: 0
+    };
+
+    let coins = [];
+    let exitPortal = { x: -100, y: -100, active: false };
+
+    function initLevel() {
+        hp = 100;
+        exitPortal.active = false;
+        gameObjects = [];
+        coins = [];
+
+        // 生成草叢
+        for(let i=0; i<6; i++) {
+            gameObjects.push({ type: 'grass', x: Math.random()*700, y: Math.random()*350, w: 100, h: 60 });
+        }
+        // 生成牆壁 (障礙物)
+        for(let i=0; i<5; i++) {
+            gameObjects.push({ type: 'wall', x: Math.random()*700, y: Math.random()*350, w: 50, h: 50 });
+        }
+        // 生成地雷 (碰到扣血)
+        for(let i=0; i<8; i++) {
+            gameObjects.push({ type: 'mine', x: Math.random()*750, y: Math.random()*400, r: 10 });
+        }
+
+        // 生成正確與錯誤答案金幣
+        const data = quizBank[currentLevel];
+        data.options.forEach((opt, i) => {
+            coins.push({
+                x: 50 + Math.random()*700,
+                y: 50 + Math.random()*350,
+                text: opt,
+                isCorrect: i === data.correct,
+                collected: false
+            });
+        });
+
+        document.getElementById('question-text').innerText = "挑戰題目：" + data.q;
+        updateUI();
+    }
+
+    function updateUI() {
+        document.getElementById('hp-fill').style.width = hp + "%";
+        document.getElementById('score-display').innerText = "SCORE: " + score;
+    }
+
+    const keys = {};
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if(!gameStarted) { gameStarted = true; initLevel(); requestAnimationFrame(gameLoop); }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function update() {
+        // 移動控制
+        if (keys['ArrowUp'] || keys['KeyW']) player.vy = -player.speed;
+        else if (keys['ArrowDown'] || keys['KeyS']) player.vy = player.speed;
+        else player.vy *= 0.8;
+
+        if (keys['ArrowLeft'] || keys['KeyA']) player.vx = -player.speed;
+        else if (keys['ArrowRight'] || keys['KeyD']) player.vx = player.speed;
+        else player.vx *= 0.8;
+
+        player.x += player.vx;
+        player.y += player.vy;
+
+        // 邊界檢查
+        player.x = Math.max(player.radius, Math.min(800 - player.radius, player.x));
+        player.y = Math.max(player.radius, Math.min(450 - player.radius, player.y));
+
+        // 牆壁碰撞
+        gameObjects.forEach(obj => {
+            if(obj.type === 'wall') {
+                if(player.x + player.radius > obj.x && player.x - player.radius < obj.x + obj.w &&
+                   player.y + player.radius > obj.y && player.y - player.radius < obj.y + obj.h) {
+                    player.x -= player.vx;
+                    player.y -= player.vy;
+                }
+            }
+            if(obj.type === 'mine') {
+                let dx = player.x - obj.x;
+                let dy = player.y - obj.y;
+                if(Math.sqrt(dx*dx + dy*dy) < player.radius + obj.r) {
+                    hp -= 0.5; // 持續扣血
+                    if(hp <= 0) { alert("你被打敗了！"); location.reload(); }
+                    updateUI();
+                }
+            }
+        });
+
+        // 金幣碰撞
+        coins.forEach(c => {
+            if(!c.collected) {
+                let dx = player.x - c.x;
+                let dy = player.y - c.y;
+                if(Math.sqrt(dx*dx + dy*dy) < player.radius + 15) {
+                    c.collected = true;
+                    if(c.isCorrect) {
+                        score += 100;
+                        exitPortal = { x: 700, y: 350, active: true };
+                        document.getElementById('question-box'); 
+                        document.getElementById('question-text').innerText = "正確！快前往紫色傳送門！";
+                    } else {
+                        hp -= 20;
+                        score = Math.max(0, score - 50);
+                        updateUI();
+                        if(hp <= 0) { alert("血量耗盡！"); location.reload(); }
+                    }
+                }
+            }
+        });
+
+        // 傳送門碰撞
+        if(exitPortal.active) {
+            let dx = player.x - exitPortal.x;
+            let dy = player.y - exitPortal.y;
+            if(Math.sqrt(dx*dx + dy*dy) < 30) {
+                currentLevel++;
+                if(currentLevel < quizBank.length) initLevel();
+                else { alert("荒野傳奇！總分：" + score); location.reload(); }
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 畫地圖底色與網格
+        ctx.strokeStyle = "rgba(255,255,255,0.05)";
+        for(let i=0; i<800; i+=40) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,450); ctx.stroke(); }
+        for(let i=0; i<450; i+=40) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(800,i); ctx.stroke(); }
+
+        // 畫障礙物
+        gameObjects.forEach(obj => {
+            if(obj.type === 'wall') {
+                ctx.fillStyle = "#57606f";
+                ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                ctx.strokeStyle = "white"; ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+            }
+            if(obj.type === 'mine') {
+                ctx.fillStyle = "#eb4d4b";
+                ctx.beginPath(); ctx.arc(obj.x, obj.y, obj.r, 0, Math.PI*2); ctx.fill();
+            }
+            if(obj.type === 'grass') {
+                ctx.fillStyle = "rgba(76, 209, 55, 0.6)";
+                ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+            }
+        });
+
+        // 畫金幣
+        coins.forEach(c => {
+            if(!c.collected) {
+                ctx.fillStyle = "#f1c40f";
+                ctx.beginPath(); ctx.arc(c.x, c.y, 15, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = "white"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
+                ctx.fillText(c.text, c.x, c.y - 25);
+            }
+        });
+
+        // 畫門
+        if(exitPortal.active) {
+            ctx.fillStyle = "#9c88ff";
+            ctx.beginPath(); ctx.arc(exitPortal.x, exitPortal.y, 30, 0, Math.PI*2); ctx.fill();
+            ctx.strokeStyle = "white"; ctx.lineWidth = 3; ctx.stroke();
+        }
+
+        // 畫玩家
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.fillStyle = player.color;
+        ctx.beginPath(); ctx.arc(0, 0, player.radius, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "white"; ctx.lineWidth = 3; ctx.stroke();
+        // 眼睛
+        ctx.fillStyle = "white";
+        ctx.fillRect(-8, -8, 6, 6); ctx.fillRect(4, -8, 6, 6);
+        ctx.restore();
+    }
+
+    function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+</script>
+
+</body>
+</html>
